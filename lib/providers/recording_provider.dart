@@ -1,0 +1,374 @@
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import '../services/audio_service.dart';
+import '../services/api_service.dart';
+import '../services/chunk_store.dart';
+
+class RecordingProvider extends ChangeNotifier {
+  final AudioService _audioService = AudioService();
+  final ChunkStore _chunkStore = ChunkStore();
+
+  RecordingState _state = RecordingState.idle;
+  String? _sessionId;
+  String? _patientName;
+  DateTime? _startTime;
+  Duration _duration = Duration.zero;
+  double _audioLevel = 0.0;
+  int _lastUploadedChunkNumber = 0;
+  String? _lastGcsPath;
+  String? _lastPublicUrl;
+
+  List<PendingChunk> _pendingChunks = [];
+  bool _isOnline = true;
+
+  // Getters
+  RecordingState get state => _state;
+  String? get sessionId => _sessionId;
+  String? get patientName => _patientName;
+  Duration get duration => _duration;
+  double get audioLevel => _audioLevel;
+  bool get isRecording => _state == RecordingState.recording;
+  bool get isPaused => _state == RecordingState.paused;
+  int get pendingChunksCount => _pendingChunks.length;
+  bool get isOnline => _isOnline;
+
+  // Setter for _isOnline
+  set isOnline(bool value) {
+    _isOnline = value;
+    notifyListeners();
+  }
+
+  Future<void> initialize() async {
+    final success = await _audioService.initialize();
+    if (!success) {
+      _state = RecordingState.error;
+      notifyListeners();
+      return;
+    }
+
+    // Listen to audio levels
+    _audioService.audioLevelStream.listen((level) {
+      _audioLevel = level;
+      notifyListeners();
+    });
+
+    // Listen to recorder state changes
+    _audioService.recorderStateStream.listen((recorderState) {
+      switch (recorderState) {
+        case RecorderState.recording:
+          _state = RecordingState.recording;
+          break;
+        case RecorderState.paused:
+          _state = RecordingState.paused;
+          break;
+        case RecorderState.stopped:
+          _state = RecordingState.stopped;
+          break;
+        case RecorderState.error:
+          _state = RecordingState.error;
+          break;
+      }
+      notifyListeners();
+    });
+
+    // Monitor connectivity
+    Connectivity().onConnectivityChanged.listen((dynamic event) {
+      // Handle both ConnectivityResult and List<ConnectivityResult>
+      bool nowOnline;
+      if (event is List<ConnectivityResult>) {
+        nowOnline = event.any((r) => r != ConnectivityResult.none);
+      } else if (event is ConnectivityResult) {
+        nowOnline = event != ConnectivityResult.none;
+      } else {
+        nowOnline = true;
+      }
+
+      final wasOnline = _isOnline;
+      _isOnline = nowOnline;
+
+      if (!wasOnline && _isOnline) {
+        // Connection restored, try to upload pending chunks
+        _retryPendingUploads();
+      }
+      notifyListeners();
+    });
+
+    // Initialize current connectivity once at startup
+    _initConnectivity();
+
+    // Load any pending chunks from disk (survive app restarts)
+    _loadPendingFromDisk();
+  }
+
+  Future<void> _initConnectivity() async {
+    try {
+      final result = await Connectivity().checkConnectivity();
+      bool nowOnline;
+      if (result is List<ConnectivityResult>) {
+        nowOnline = result.any((r) => r != ConnectivityResult.none);
+      } else if (result is ConnectivityResult) {
+        nowOnline = result != ConnectivityResult.none;
+      } else {
+        nowOnline = true;
+      }
+      _isOnline = nowOnline;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> startRecording({
+    required String patientId,
+    required String patientName,
+  }) async {
+    try {
+      _state = RecordingState.starting;
+      notifyListeners();
+
+      // Create session
+      _sessionId = await ApiService.createSession(
+        patientId: patientId,
+        userId: 'user_123', // In real app, get from authentication
+        patientName: patientName,
+      );
+
+      _patientName = patientName;
+      _startTime = DateTime.now();
+      _lastUploadedChunkNumber = 0;
+      _lastGcsPath = null;
+      _lastPublicUrl = null;
+
+      // Start audio recording
+      final success = await _audioService.startRecording(
+        sessionId: _sessionId!,
+        onChunkReady: _handleAudioChunk,
+      );
+
+      if (success) {
+        _state = RecordingState.recording;
+        _startDurationTimer();
+      } else {
+        _state = RecordingState.error;
+      }
+      notifyListeners();
+    } catch (e) {
+      print('Error starting recording: $e');
+      _state = RecordingState.error;
+      notifyListeners();
+    }
+  }
+
+  Future<void> pauseRecording() async {
+    await _audioService.pauseRecording();
+  }
+
+  Future<void> resumeRecording() async {
+    await _audioService.resumeRecording();
+  }
+
+  Future<void> stopRecording() async {
+    try {
+      await _audioService.stopRecording();
+      // Mark session complete using the last uploaded chunk info, if present
+      if (_sessionId != null && _lastUploadedChunkNumber > 0 &&
+          _lastGcsPath != null && _lastPublicUrl != null) {
+        try {
+          await ApiService.notifyChunkUploaded(
+            sessionId: _sessionId!,
+            gcsPath: _lastGcsPath!,
+            chunkNumber: _lastUploadedChunkNumber,
+            isLast: true,
+            totalChunks: _lastUploadedChunkNumber,
+            publicUrl: _lastPublicUrl!,
+          );
+        } catch (e) {
+          print('Error sending final notify: $e');
+        }
+      }
+
+      _state = RecordingState.stopped;
+      _sessionId = null;
+      _patientName = null;
+      _startTime = null;
+      _duration = Duration.zero;
+      _lastUploadedChunkNumber = 0;
+      _lastGcsPath = null;
+      _lastPublicUrl = null;
+      notifyListeners();
+    } catch (e) {
+      print('Error stopping recording: $e');
+      _state = RecordingState.error;
+      notifyListeners();
+    }
+  }
+
+  void _handleAudioChunk(String sessionId, int chunkNumber, Uint8List audioData) async {
+    try {
+      if (_isOnline) {
+        await _uploadChunk(sessionId, chunkNumber, audioData);
+      } else {
+        // Store chunk for later upload
+        await _persistPendingChunk(sessionId, chunkNumber, audioData);
+        notifyListeners();
+      }
+    } catch (e) {
+      print('Error handling audio chunk: $e');
+      // Store as pending chunk on error
+      await _persistPendingChunk(sessionId, chunkNumber, audioData);
+      notifyListeners();
+    }
+  }
+
+  Future<void> _uploadChunk(String sessionId, int chunkNumber, Uint8List audioData) async {
+    // Get presigned URL
+    final presignedResponse = await ApiService.getPresignedUrl(
+      sessionId: sessionId,
+      chunkNumber: chunkNumber,
+    );
+
+    // Upload chunk
+    await ApiService.uploadChunk(
+      presignedUrl: presignedResponse.url,
+      audioData: audioData,
+    );
+
+    // Notify backend
+    await ApiService.notifyChunkUploaded(
+      sessionId: sessionId,
+      gcsPath: presignedResponse.gcsPath,
+      chunkNumber: chunkNumber,
+      isLast: false, // We'll handle this differently in real implementation
+      totalChunks: 0, // Calculate based on recording duration
+      publicUrl: presignedResponse.publicUrl,
+    );
+
+    print('Chunk $chunkNumber uploaded successfully for session $sessionId');
+    _lastUploadedChunkNumber = chunkNumber;
+    _lastGcsPath = presignedResponse.gcsPath;
+    _lastPublicUrl = presignedResponse.publicUrl;
+
+    // After a successful upload, try any pending queued chunks if online
+    if (_isOnline && _pendingChunks.isNotEmpty) {
+      _retryPendingUploads();
+    }
+  }
+
+  Future<void> _retryPendingUploads() async {
+    final inMemory = List<PendingChunk>.from(_pendingChunks);
+    _pendingChunks.clear();
+    // Load disk-backed entries
+    final diskEntries = await _chunkStore.loadAll();
+
+    // Retry in-memory first (likely newest)
+    for (final chunk in inMemory) {
+      try {
+        await _uploadChunk(chunk.sessionId, chunk.chunkNumber, chunk.audioData);
+      } catch (e) {
+        print('Failed to retry chunk upload: $e');
+        // Add back to pending if still failing
+        _pendingChunks.add(chunk);
+      }
+    }
+
+    // Retry disk-backed entries
+    for (final entry in diskEntries) {
+      try {
+        final bytes = await _chunkStore.readChunkBytes(entry);
+        if (bytes == null) {
+          await _chunkStore.remove(entry);
+          continue;
+        }
+        await _uploadChunk(entry.sessionId, entry.chunkNumber, bytes);
+        await _chunkStore.remove(entry);
+      } catch (e) {
+        print('Failed to retry disk chunk upload: $e');
+      }
+    }
+    notifyListeners();
+  }
+
+  void _startDurationTimer() {
+    Stream.periodic(const Duration(seconds: 1)).listen((_) {
+      if (_state == RecordingState.recording && _startTime != null) {
+        _duration = DateTime.now().difference(_startTime!);
+        notifyListeners();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _audioService.dispose();
+    super.dispose();
+  }
+
+  // Utility: format duration as HH:MM:SS
+  String formatDuration(Duration duration) {
+    final int hours = duration.inHours;
+    final int minutes = duration.inMinutes.remainder(60);
+    final int seconds = duration.inSeconds.remainder(60);
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    if (hours > 0) {
+      return '${twoDigits(hours)}:${twoDigits(minutes)}:${twoDigits(seconds)}';
+    }
+    return '${twoDigits(minutes)}:${twoDigits(seconds)}';
+  }
+}
+
+enum RecordingState {
+  idle,
+  starting,
+  recording,
+  paused,
+  stopped,
+  error,
+}
+
+class PendingChunk {
+  final String sessionId;
+  final int chunkNumber;
+  final Uint8List audioData;
+  final DateTime timestamp;
+
+  PendingChunk({
+    required this.sessionId,
+    required this.chunkNumber,
+    required this.audioData,
+    required this.timestamp,
+  });
+}
+
+extension _RecordingProviderDisk on RecordingProvider {
+  Future<void> _loadPendingFromDisk() async {
+    try {
+      final diskEntries = await _chunkStore.loadAll();
+      if (diskEntries.isNotEmpty) {
+        // Keep only a lightweight counter in memory; actual bytes remain on disk
+        notifyListeners();
+      }
+    } catch (e) {
+      print('Failed loading pending chunks from disk: $e');
+    }
+  }
+
+  Future<void> _persistPendingChunk(
+      String sessionId, int chunkNumber, Uint8List audioData) async {
+    try {
+      // Write to disk first to survive process death
+      await _chunkStore.writeChunk(
+        sessionId: sessionId,
+        chunkNumber: chunkNumber,
+        bytes: audioData,
+      );
+      // Also keep in-memory for quick retry if still running
+      _pendingChunks.add(PendingChunk(
+        sessionId: sessionId,
+        chunkNumber: chunkNumber,
+        audioData: audioData,
+        timestamp: DateTime.now(),
+      ));
+    } catch (e) {
+      print('Failed to persist pending chunk: $e');
+    }
+  }
+}
