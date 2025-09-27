@@ -58,21 +58,20 @@ A Flutter application for real-time medical consultation recording and transcrip
 ## 📦 Deliverables
 
 ### ✅ Android APK
-- **Download**: [GitHub Releases](https://github.com/[your-username]/ai-scribe-copilot/releases)
+- **Download**: [Drive](https://drive.google.com/drive/folders/1MR7922CcO7YTX9AWdHnC480iM9a5_lIW?usp=sharing)
 - **Build Command**: `flutter build apk --release`
 - **Installation**: Direct APK installation
 
 ### ✅ iOS Demonstration
-- **Video**: [Loom Demo](https://loom.com/share/[your-video-id])
+- **Video**: [Loom Demo](https://www.loom.com/share/90a2c7bdf0b54fcda181656ebe76d1e4?t=272&sid=411a04b3-08d8-4b60-92cd-b2e0a4068ba0)
 - **Features Shown**: All native features, interruption handling, background recording
 
 ### ✅ Backend Deployment
 - **Live URL**: https://medinote-backend-production.up.railway.app
-- **API Documentation**: [Google Docs](https://docs.google.com/document/d/1hzfry0fg7qQQb39cswEychYMtBiBKDAqIg6LamAKENI/edit?usp=sharing)
-- **Postman Collection**: [Download](https://drive.google.com/file/d/1rnEjRzH64ESlIi5VQekG525Dsf8IQZTP/view?usp=sharing)
+- **Postman Collection**: [Download](https://drive.google.com/drive/folders/1MR7922CcO7YTX9AWdHnC480iM9a5_lIW?usp=sharing)
 
 ### ✅ Demo Video (5 minutes)
-- **Loom Link**: [5-minute demo showing all features](https://loom.com/share/[your-demo-video])
+- **Loom Link**: [5-minute demo showing all features](https://www.loom.com/share/90a2c7bdf0b54fcda181656ebe76d1e4?t=272&sid=411a04b3-08d8-4b60-92cd-b2e0a4068ba0)
 - **Test Scenarios**: Phone locked recording, call interruption, network outage, app switching, app kill recovery
 
 ## 🔧 API Endpoints & cURL Commands
@@ -241,12 +240,12 @@ curl -X POST "${BASE_URL}/v1/notify-chunk-uploaded" \
 ## 📦 Deliverables
 
 ### Android APK
-- **Download**: [GitHub Releases](https://github.com/[your-username]/ai-scribe-copilot/releases)
+- **Download**: [GitHub Releases]((https://drive.google.com/drive/folders/1MR7922CcO7YTX9AWdHnC480iM9a5_lIW?usp=sharing))
 - **Build Command**: `flutter build apk --release`
 - **Installation**: Direct APK installation
 
 ### iOS Demonstration
-- **Video**: [Loom Demo](https://loom.com/share/[your-video-id])
+- **Video**: [Loom Demo](https://www.loom.com/share/90a2c7bdf0b54fcda181656ebe76d1e4?t=272&sid=411a04b3-08d8-4b60-92cd-b2e0a4068ba0)
 - **Features Shown**: All native features, interruption handling, background recording
 
 ### Backend Deployment
@@ -439,12 +438,6 @@ flutter run --debug
 - ✅ **Offline Resilience**: Disk-persistent chunk storage
 - ✅ **Professional Polish**: Material Design, proper permissions, error handling
 
-## 📞 Support
-
-For issues or questions:
-- **GitHub Issues**: [Create Issue](https://github.com/[your-username]/ai-scribe-copilot/issues)
-- **Email**: [your-email@example.com]
-- **Documentation**: See API docs and Postman collection
 
 ---
 
