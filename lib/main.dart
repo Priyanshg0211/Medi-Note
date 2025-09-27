@@ -13,6 +13,7 @@ void main() async {
 
 class MediNoteApp extends StatelessWidget {
   const MediNoteApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MultiProvider(

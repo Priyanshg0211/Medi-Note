@@ -44,7 +44,7 @@ class FirebaseService {
             (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       );
     } catch (e) {
-      print('Error adding patient to Firebase: $e');
+      // print('Error adding patient to Firebase: $e');
       // Return a local patient if Firebase fails
       return Patient(
         id: 'local_${DateTime.now().millisecondsSinceEpoch}',
@@ -78,7 +78,7 @@ class FirebaseService {
         );
       }).toList();
     } catch (e) {
-      print('Error getting patients from Firebase: $e');
+      // print('Error getting patients from Firebase: $e');
       return [];
     }
   }
@@ -104,7 +104,7 @@ class FirebaseService {
           .doc(patientId)
           .update(updateData);
     } catch (e) {
-      print('Error updating patient in Firebase: $e');
+      // print('Error updating patient in Firebase: $e');
       throw Exception('Failed to update patient: $e');
     }
   }
@@ -114,7 +114,7 @@ class FirebaseService {
     try {
       await _firestore.collection(_patientsCollection).doc(patientId).delete();
     } catch (e) {
-      print('Error deleting patient from Firebase: $e');
+      // print('Error deleting patient from Firebase: $e');
       throw Exception('Failed to delete patient: $e');
     }
   }
@@ -142,7 +142,7 @@ class FirebaseService {
 
       return docRef.id;
     } catch (e) {
-      print('Error creating recording session in Firebase: $e');
+      // print('Error creating recording session in Firebase: $e');
       throw Exception('Failed to create recording session: $e');
     }
   }
@@ -167,7 +167,7 @@ class FirebaseService {
           .doc(sessionId)
           .update(updateData);
     } catch (e) {
-      print('Error updating recording session in Firebase: $e');
+      // print('Error updating recording session in Firebase: $e');
       throw Exception('Failed to update recording session: $e');
     }
   }
@@ -206,7 +206,7 @@ class FirebaseService {
         );
       }).toList();
     } catch (e) {
-      print('Error getting recording sessions from Firebase: $e');
+      // print('Error getting recording sessions from Firebase: $e');
       return [];
     }
   }
@@ -220,7 +220,7 @@ class FirebaseService {
           .doc(sessionId)
           .delete();
     } catch (e) {
-      print('Error deleting recording session from Firebase: $e');
+      // print('Error deleting recording session from Firebase: $e');
       throw Exception('Failed to delete recording session: $e');
     }
   }

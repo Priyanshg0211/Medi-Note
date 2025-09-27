@@ -24,7 +24,6 @@ class RecordingProvider extends ChangeNotifier {
   List<PendingChunk> _pendingChunks = [];
   bool _isOnline = true;
 
-  // Getters
   RecordingState get state => _state;
   String? get sessionId => _sessionId;
   String? get userId => _userId;
@@ -36,7 +35,6 @@ class RecordingProvider extends ChangeNotifier {
   int get pendingChunksCount => _pendingChunks.length;
   bool get isOnline => _isOnline;
 
-  // Setter for _isOnline
   set isOnline(bool value) {
     _isOnline = value;
     notifyListeners();
@@ -51,7 +49,7 @@ class RecordingProvider extends ChangeNotifier {
         return;
       }
     } catch (e) {
-      print('Failed to initialize audio service: $e');
+      // print('Failed to initialize audio service: $e');
       _state = RecordingState.error;
       notifyListeners();
       return;
@@ -139,7 +137,7 @@ class RecordingProvider extends ChangeNotifier {
           userId: userId,
         );
       } catch (e) {
-        print('Failed to create Firebase session: $e');
+        // print('Failed to create Firebase session: $e');
         firebaseSessionId =
             'firebase_offline_${DateTime.now().millisecondsSinceEpoch}';
       }
@@ -152,7 +150,7 @@ class RecordingProvider extends ChangeNotifier {
           patientName: patientName,
         );
       } catch (e) {
-        print('Failed to create API session, using offline mode: $e');
+        // print('Failed to create API session, using offline mode: $e');
         // Use Firebase session ID as fallback
         _sessionId = firebaseSessionId;
       }
@@ -182,12 +180,12 @@ class RecordingProvider extends ChangeNotifier {
             status: 'error',
           );
         } catch (e) {
-          print('Failed to update Firebase session status: $e');
+          // print('Failed to update Firebase session status: $e');
         }
       }
       notifyListeners();
     } catch (e) {
-      print('Error starting recording: $e');
+      // print('Error starting recording: $e');
       _state = RecordingState.error;
       notifyListeners();
     }
@@ -220,7 +218,7 @@ class RecordingProvider extends ChangeNotifier {
             publicUrl: _lastPublicUrl!,
           );
         } catch (e) {
-          print('Error sending final notify: $e');
+          // print('Error sending final notify: $e');
         }
       }
 
@@ -234,7 +232,7 @@ class RecordingProvider extends ChangeNotifier {
             endTime: DateTime.now().toIso8601String(),
           );
         } catch (e) {
-          print('Failed to update Firebase session status: $e');
+          // print('Failed to update Firebase session status: $e');
         }
       }
 
@@ -249,7 +247,7 @@ class RecordingProvider extends ChangeNotifier {
       _lastPublicUrl = null;
       notifyListeners();
     } catch (e) {
-      print('Error stopping recording: $e');
+      // print('Error stopping recording: $e');
       _state = RecordingState.error;
       notifyListeners();
     }
@@ -269,7 +267,7 @@ class RecordingProvider extends ChangeNotifier {
         notifyListeners();
       }
     } catch (e) {
-      print('Error handling audio chunk: $e');
+      // print('Error handling audio chunk: $e');
       // Store as pending chunk on error
       await _persistPendingChunk(sessionId, chunkNumber, audioData);
       notifyListeners();
@@ -303,7 +301,7 @@ class RecordingProvider extends ChangeNotifier {
       publicUrl: presignedResponse.publicUrl,
     );
 
-    print('Chunk $chunkNumber uploaded successfully for session $sessionId');
+    // print('Chunk $chunkNumber uploaded successfully for session $sessionId');
     _lastUploadedChunkNumber = chunkNumber;
     _lastGcsPath = presignedResponse.gcsPath;
     _lastPublicUrl = presignedResponse.publicUrl;
@@ -325,7 +323,7 @@ class RecordingProvider extends ChangeNotifier {
       try {
         await _uploadChunk(chunk.sessionId, chunk.chunkNumber, chunk.audioData);
       } catch (e) {
-        print('Failed to retry chunk upload: $e');
+        // print('Failed to retry chunk upload: $e');
         // Add back to pending if still failing
         _pendingChunks.add(chunk);
       }
@@ -342,7 +340,7 @@ class RecordingProvider extends ChangeNotifier {
         await _uploadChunk(entry.sessionId, entry.chunkNumber, bytes);
         await _chunkStore.remove(entry);
       } catch (e) {
-        print('Failed to retry disk chunk upload: $e');
+        // print('Failed to retry disk chunk upload: $e');
       }
     }
     notifyListeners();
@@ -403,7 +401,7 @@ extension _RecordingProviderDisk on RecordingProvider {
         // Note: notifyListeners() will be called by the calling method
       }
     } catch (e) {
-      print('Failed loading pending chunks from disk: $e');
+      // print('Failed loading pending chunks from disk: $e');
     }
   }
 
@@ -431,7 +429,7 @@ extension _RecordingProviderDisk on RecordingProvider {
         ),
       );
     } catch (e) {
-      print('Failed to persist pending chunk: $e');
+      // print('Failed to persist pending chunk: $e');
     }
   }
 }

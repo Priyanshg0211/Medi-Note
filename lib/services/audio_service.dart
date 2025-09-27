@@ -17,7 +17,7 @@ class AudioService {
   StreamSubscription? _recorderSubscription;
   StreamController<double>? _levelController;
   StreamController<RecorderState>? _stateController;
-  double _smoothedLevel = 0.0; // 0..1 smoothed envelope
+  double _smoothedLevel = 0.0;
   bool _isStopping = false;
   bool _isProcessingChunk = false;
 
@@ -28,10 +28,7 @@ class AudioService {
   String? _currentFilePath;
   Timer? _chunkTimer;
   int _chunkCounter = 1;
-  int _lastProcessedBytes =
-      0; // Track last processed file size for incremental chunks
-
-  // Stream controllers
+  int _lastProcessedBytes = 0;
   Stream<double> get audioLevelStream =>
       _levelController?.stream ?? Stream.empty();
   Stream<RecorderState> get recorderStateStream =>
@@ -39,20 +36,15 @@ class AudioService {
 
   Future<bool> initialize() async {
     try {
-      // Check if already initialized
       if (_isInitialized) {
         return true;
       }
 
-      // Request permissions
       final micPermission = await Permission.microphone.request();
 
       if (micPermission != PermissionStatus.granted) {
-        print('Microphone permission not granted: $micPermission');
         return false;
       }
-
-      // Initialize audio session
       final session = await AudioSession.instance;
       await session.configure(
         AudioSessionConfiguration(
@@ -60,8 +52,7 @@ class AudioService {
           avAudioSessionCategoryOptions:
               AVAudioSessionCategoryOptions.allowBluetooth |
               AVAudioSessionCategoryOptions.defaultToSpeaker,
-          avAudioSessionMode:
-              AVAudioSessionMode.defaultMode, // Fixed: changed from 'default'
+          avAudioSessionMode: AVAudioSessionMode.defaultMode,
           avAudioSessionRouteSharingPolicy:
               AVAudioSessionRouteSharingPolicy.defaultPolicy,
           avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
@@ -75,43 +66,30 @@ class AudioService {
         ),
       );
 
-      // Initialize recorder and player
       _recorder = FlutterSoundRecorder();
       _player = FlutterSoundPlayer();
 
-      // Open recorder with error handling
       try {
         await _recorder!.openRecorder();
-        // Emit progress frequently for responsive UI
         try {
           await _recorder!.setSubscriptionDuration(
             const Duration(milliseconds: 100),
           );
-        } catch (_) {
-          // Some platforms may not support; ignore safely
-        }
+        } catch (_) {}
       } catch (e) {
-        print('Failed to open recorder: $e');
         return false;
       }
 
-      // Open player with error handling
       try {
         await _player!.openPlayer();
-      } catch (e) {
-        print('Failed to open player: $e');
-        // Player failure shouldn't prevent recording
-      }
+      } catch (e) {}
 
-      // Initialize stream controllers
       _levelController = StreamController<double>.broadcast();
       _stateController = StreamController<RecorderState>.broadcast();
 
       _isInitialized = true;
-      print('AudioService initialized successfully');
       return true;
     } catch (e) {
-      print('AudioService initialization failed: $e');
       return false;
     }
   }
@@ -127,15 +105,13 @@ class AudioService {
     try {
       _currentSessionId = sessionId;
       _chunkCounter = 1;
-      _lastProcessedBytes = 0; // Reset for new recording
+      _lastProcessedBytes = 0;
       _isStopping = false;
       _isProcessingChunk = false;
 
-      // Get temporary directory for audio file
       final tempDir = await getTemporaryDirectory();
       _currentFilePath = '${tempDir.path}/recording_$sessionId.wav';
 
-      // Start recording with specific codec settings
       await _recorder!.startRecorder(
         toFile: _currentFilePath,
         codec: Codec.pcm16WAV,
@@ -144,38 +120,31 @@ class AudioService {
         bitRate: 128000,
       );
 
-      // Listen to audio levels for visualization
-      // Increase progress emission rate for more responsive level UI
       _recorderSubscription = _recorder!.onProgress!.listen((e) {
-        // Map decibels to 0..1 using calibrated range, then apply fast attack / slow release
-        const double minDb = -60.0; // noise floor
-        const double maxDb = 0.0; // loud speech
+        const double minDb = -60.0;
+        const double maxDb = 0.0;
         final double levelDb = (e.decibels ?? minDb).clamp(minDb, maxDb);
         double instant = (levelDb - minDb) / (maxDb - minDb);
         if (!instant.isFinite) instant = 0.0;
 
-        // Envelope smoothing: rise quickly, fall slowly
-        const double attack = 0.6; // 60% new value per tick when rising
-        const double release = 0.15; // 15% new value per tick when falling
+        const double attack = 0.6;
+        const double release = 0.15;
         if (instant > _smoothedLevel) {
           _smoothedLevel = attack * instant + (1.0 - attack) * _smoothedLevel;
         } else {
           _smoothedLevel = release * instant + (1.0 - release) * _smoothedLevel;
         }
 
-        // Small gate to zero-out very quiet noise while still showing soft speech
         final double gated = _smoothedLevel < 0.02 ? 0.0 : _smoothedLevel;
         _levelController?.add(gated.clamp(0.0, 1.0));
       });
 
-      // Start chunked streaming every 5 seconds
       _chunkTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
         await _processAudioChunk(onChunkReady);
       });
 
       _stateController?.add(RecorderState.recording);
 
-      // React to interruptions (phone calls, focus loss)
       try {
         final session = await AudioSession.instance;
         session.becomingNoisyEventStream.listen((_) async {
@@ -197,10 +166,8 @@ class AudioService {
           }
         });
       } catch (_) {}
-      print('Recording started for session: $sessionId');
       return true;
     } catch (e) {
-      print('Failed to start recording: $e');
       return false;
     }
   }
@@ -215,22 +182,18 @@ class AudioService {
     try {
       _isProcessingChunk = true;
 
-      // Only process if recorder is active
       final bool canPause = (_recorder!.isRecording == true);
       if (canPause) {
         await _recorder!.pauseRecorder();
       }
 
-      // Read the current audio file
       final file = File(_currentFilePath!);
       if (await file.exists()) {
         final currentFileSize = await file.length();
 
-        // Only process if file has grown since last chunk
         if (currentFileSize > _lastProcessedBytes) {
           final audioBytes = await file.readAsBytes();
 
-          // Extract only the new data since last chunk
           final newDataStart = _lastProcessedBytes;
           final newDataLength = currentFileSize - _lastProcessedBytes;
 
@@ -240,9 +203,6 @@ class AudioService {
               newDataStart + newDataLength,
             );
 
-            print(
-              'Sending chunk $_chunkCounter: ${chunkData.length} bytes (${newDataStart}-${newDataStart + newDataLength})',
-            );
             onChunkReady(
               _currentSessionId!,
               _chunkCounter,
@@ -251,17 +211,14 @@ class AudioService {
             _chunkCounter++;
             _lastProcessedBytes = currentFileSize;
           }
-        } else {
-          print('No new audio data to process');
         }
       }
 
-      // Resume recording if we paused and not stopping
       if (canPause && !_isStopping) {
         await _recorder!.resumeRecorder();
       }
     } catch (e) {
-      print('Error processing audio chunk: $e');
+      // Handle error silently
     } finally {
       _isProcessingChunk = false;
     }
@@ -271,7 +228,6 @@ class AudioService {
     if (_recorder?.isPaused == false) {
       await _recorder!.pauseRecorder();
       _stateController?.add(RecorderState.paused);
-      print('Recording paused');
     }
   }
 
@@ -279,44 +235,34 @@ class AudioService {
     if (_recorder?.isPaused == true) {
       await _recorder!.resumeRecorder();
       _stateController?.add(RecorderState.recording);
-      print('Recording resumed');
     }
   }
 
   Future<void> stopRecording() async {
     try {
       _isStopping = true;
-      // Cancel chunk timer
       _chunkTimer?.cancel();
       _chunkTimer = null;
 
-      // Wait briefly if a chunk is processing to avoid race
       final int startWaitMs = DateTime.now().millisecondsSinceEpoch;
       while (_isProcessingChunk &&
           DateTime.now().millisecondsSinceEpoch - startWaitMs < 1000) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
       }
 
-      // Stop recording (idempotent)
       if (_recorder != null) {
         try {
           if (_recorder!.isRecording == true || _recorder!.isPaused == true) {
             await _recorder!.stopRecorder();
           }
-        } catch (e) {
-          // Some platforms may throw if already stopped
-          print('stopRecorder ignored: $e');
-        }
+        } catch (e) {}
       }
 
-      // Cancel subscription
       await _recorderSubscription?.cancel();
       _recorderSubscription = null;
 
       _stateController?.add(RecorderState.stopped);
-      print('Recording stopped');
 
-      // Clean up file
       if (_currentFilePath != null) {
         final file = File(_currentFilePath!);
         if (await file.exists()) {
@@ -327,12 +273,10 @@ class AudioService {
       _currentSessionId = null;
       _currentFilePath = null;
       _chunkCounter = 1;
-      _lastProcessedBytes = 0; // Reset for next recording
+      _lastProcessedBytes = 0;
       _isStopping = false;
       _isProcessingChunk = false;
-    } catch (e) {
-      print('Error stopping recording: $e');
-    }
+    } catch (e) {}
   }
 
   Future<void> dispose() async {

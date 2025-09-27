@@ -5,20 +5,14 @@ import 'package:http/http.dart' as http;
 import '../models/patient.dart';
 
 class ApiService {
-  // Backend URL - Using deployed Railway backend
   static const String baseUrl =
       'https://medinote-backend-production.up.railway.app';
-  // For local development: 'http://localhost:3000'
-  // For device testing: 'http://YOUR_COMPUTER_IP:3000'
-
   static const String authToken = 'test-token';
 
   static const Map<String, String> _headers = {
     'Content-Type': 'application/json',
     'Authorization': 'Bearer $authToken',
   };
-
-  // Create a new recording session
   static Future<String> createSession({
     required String patientId,
     required String userId,
@@ -47,7 +41,6 @@ class ApiService {
         throw Exception('Failed to create session: ${response.statusCode}');
       }
     } catch (e) {
-      print('Error creating session: $e');
       if (e is TimeoutException ||
           e.toString().contains('TimeoutException') ||
           e.toString().contains('timed out')) {
@@ -59,7 +52,6 @@ class ApiService {
     }
   }
 
-  // Get presigned URL for chunk upload
   static Future<PresignedUrlResponse> getPresignedUrl({
     required String sessionId,
     required int chunkNumber,
@@ -82,19 +74,15 @@ class ApiService {
         throw Exception('Failed to get presigned URL: ${response.statusCode}');
       }
     } catch (e) {
-      print('Error getting presigned URL: $e');
       rethrow;
     }
   }
 
-  // Upload audio chunk to presigned URL
   static Future<void> uploadChunk({
     required String presignedUrl,
     required Uint8List audioData,
   }) async {
     try {
-      print('Uploading chunk to: $presignedUrl (${audioData.length} bytes)');
-
       final response = await http.put(
         Uri.parse(presignedUrl),
         headers: {'Content-Type': 'audio/wav'},
@@ -102,17 +90,15 @@ class ApiService {
       );
 
       if (response.statusCode == 200) {
-        print('Chunk upload successful');
+        return;
       } else {
         throw Exception('Failed to upload chunk: ${response.statusCode}');
       }
     } catch (e) {
-      print('Error uploading chunk: $e');
       rethrow;
     }
   }
 
-  // Notify backend that chunk was uploaded
   static Future<void> notifyChunkUploaded({
     required String sessionId,
     required String gcsPath,
@@ -122,10 +108,6 @@ class ApiService {
     required String publicUrl,
   }) async {
     try {
-      print(
-        'Notifying chunk upload: session=$sessionId, chunk=$chunkNumber, isLast=$isLast',
-      );
-
       final response = await http.post(
         Uri.parse('$baseUrl/api/v1/notify-chunk-uploaded'),
         headers: _headers,
@@ -144,19 +126,17 @@ class ApiService {
       );
 
       if (response.statusCode == 200) {
-        print('Chunk notification successful');
+        return;
       } else {
         throw Exception(
           'Failed to notify chunk upload: ${response.statusCode}',
         );
       }
     } catch (e) {
-      print('Error notifying chunk upload: $e');
       rethrow;
     }
   }
 
-  // Get patients list
   static Future<List<Patient>> getPatients({required String userId}) async {
     try {
       final response = await http
@@ -174,7 +154,6 @@ class ApiService {
         throw Exception('Failed to get patients: ${response.statusCode}');
       }
     } catch (e) {
-      print('Error getting patients: $e');
       if (e is TimeoutException ||
           e.toString().contains('TimeoutException') ||
           e.toString().contains('timed out')) {
@@ -186,7 +165,6 @@ class ApiService {
     }
   }
 
-  // Create a new patient and return it
   static Future<Patient> addPatient({
     required String name,
     required String userId,
@@ -200,21 +178,15 @@ class ApiService {
           )
           .timeout(const Duration(seconds: 30));
 
-      print('Add patient response status: ${response.statusCode}');
-      print('Add patient response body: ${response.body}');
-
       if (response.statusCode == 201 || response.statusCode == 200) {
         final data = json.decode(response.body);
-        print('Parsed response data: $data');
 
-        // Try different possible response structures
         Map<String, dynamic> patientJson;
         if (data.containsKey('patient')) {
           patientJson = data['patient'];
         } else if (data.containsKey('data')) {
           patientJson = data['data'];
         } else {
-          // Assume the response is the patient data directly
           patientJson = data;
         }
 
@@ -231,12 +203,9 @@ class ApiService {
         );
       }
     } catch (e) {
-      print('Error adding patient: $e');
       if (e is TimeoutException ||
           e.toString().contains('TimeoutException') ||
           e.toString().contains('timed out')) {
-        // Create a local patient when server is unavailable
-        print('Server unavailable, creating local patient');
         return Patient(
           id: 'local_${DateTime.now().millisecondsSinceEpoch}',
           name: name,
