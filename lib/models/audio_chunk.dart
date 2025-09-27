@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 class AudioChunk {
   final String sessionId;
+  final String userId;
   final int chunkNumber;
   final Uint8List audioData;
   final DateTime timestamp;
@@ -10,6 +11,7 @@ class AudioChunk {
 
   AudioChunk({
     required this.sessionId,
+    required this.userId,
     required this.chunkNumber,
     required this.audioData,
     required this.timestamp,
@@ -20,6 +22,7 @@ class AudioChunk {
   Map<String, dynamic> toJson() {
     return {
       'sessionId': sessionId,
+      'userId': userId,
       'chunkNumber': chunkNumber,
       'timestamp': timestamp.toIso8601String(),
       'isUploaded': isUploaded,
@@ -27,4 +30,3 @@ class AudioChunk {
     };
   }
 }
-

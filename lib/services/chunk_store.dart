@@ -5,30 +5,37 @@ import 'package:path_provider/path_provider.dart';
 
 class ChunkStoreEntry {
   final String sessionId;
+  final String userId;
   final int chunkNumber;
   final String filePath;
   final DateTime timestamp;
 
   ChunkStoreEntry({
     required this.sessionId,
+    required this.userId,
     required this.chunkNumber,
     required this.filePath,
     required this.timestamp,
   });
 
   Map<String, dynamic> toJson() => {
-        'sessionId': sessionId,
-        'chunkNumber': chunkNumber,
-        'filePath': filePath,
-        'timestamp': timestamp.toIso8601String(),
-      };
+    'sessionId': sessionId,
+    'userId': userId,
+    'chunkNumber': chunkNumber,
+    'filePath': filePath,
+    'timestamp': timestamp.toIso8601String(),
+  };
 
   static ChunkStoreEntry fromJson(Map<String, dynamic> json) {
     return ChunkStoreEntry(
       sessionId: json['sessionId'] as String,
+      userId:
+          json['userId'] as String? ??
+          'unknown', // Fallback for backward compatibility
       chunkNumber: (json['chunkNumber'] as num).toInt(),
       filePath: json['filePath'] as String,
-      timestamp: DateTime.tryParse(json['timestamp'] as String? ?? '') ??
+      timestamp:
+          DateTime.tryParse(json['timestamp'] as String? ?? '') ??
           DateTime.now(),
     );
   }
@@ -69,19 +76,24 @@ class ChunkStore {
 
   Future<void> _saveAll(List<ChunkStoreEntry> entries) async {
     final file = await _manifestFile();
-    await file.writeAsString(json.encode(entries.map((e) => e.toJson()).toList()));
+    await file.writeAsString(
+      json.encode(entries.map((e) => e.toJson()).toList()),
+    );
   }
 
-  Future<ChunkStoreEntry> writeChunk(
-      {required String sessionId,
-      required int chunkNumber,
-      required Uint8List bytes}) async {
+  Future<ChunkStoreEntry> writeChunk({
+    required String sessionId,
+    required String userId,
+    required int chunkNumber,
+    required Uint8List bytes,
+  }) async {
     final dir = await _ensureChunksDir();
     final fileName = '${sessionId}_$chunkNumber.wav';
     final file = File('${dir.path}/$fileName');
     await file.writeAsBytes(bytes, flush: true);
     final entry = ChunkStoreEntry(
       sessionId: sessionId,
+      userId: userId,
       chunkNumber: chunkNumber,
       filePath: file.path,
       timestamp: DateTime.now(),
@@ -105,8 +117,10 @@ class ChunkStore {
 
   Future<void> remove(ChunkStoreEntry entry) async {
     final entries = await loadAll();
-    entries.removeWhere((e) =>
-        e.sessionId == entry.sessionId && e.chunkNumber == entry.chunkNumber);
+    entries.removeWhere(
+      (e) =>
+          e.sessionId == entry.sessionId && e.chunkNumber == entry.chunkNumber,
+    );
     await _saveAll(entries);
     try {
       final f = File(entry.filePath);
@@ -116,5 +130,3 @@ class ChunkStore {
     } catch (_) {}
   }
 }
-
-

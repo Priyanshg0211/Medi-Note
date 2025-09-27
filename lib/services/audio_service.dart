@@ -28,7 +28,8 @@ class AudioService {
   String? _currentFilePath;
   Timer? _chunkTimer;
   int _chunkCounter = 1;
-  int _lastProcessedBytes = 0; // Track last processed file size for incremental chunks
+  int _lastProcessedBytes =
+      0; // Track last processed file size for incremental chunks
 
   // Stream controllers
   Stream<double> get audioLevelStream =>
@@ -38,43 +39,69 @@ class AudioService {
 
   Future<bool> initialize() async {
     try {
+      // Check if already initialized
+      if (_isInitialized) {
+        return true;
+      }
+
       // Request permissions
       final micPermission = await Permission.microphone.request();
 
       if (micPermission != PermissionStatus.granted) {
-        throw Exception('Microphone permission not granted');
+        print('Microphone permission not granted: $micPermission');
+        return false;
       }
 
       // Initialize audio session
       final session = await AudioSession.instance;
-      await session.configure(AudioSessionConfiguration(
-        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-        avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.allowBluetooth |
-            AVAudioSessionCategoryOptions.defaultToSpeaker,
-        avAudioSessionMode: AVAudioSessionMode.defaultMode, // Fixed: changed from 'default'
-        avAudioSessionRouteSharingPolicy: AVAudioSessionRouteSharingPolicy.defaultPolicy,
-        avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
-        androidAudioAttributes: const AndroidAudioAttributes(
-          contentType: AndroidAudioContentType.speech,
-          flags: AndroidAudioFlags.none,
-          usage: AndroidAudioUsage.voiceCommunication,
+      await session.configure(
+        AudioSessionConfiguration(
+          avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+          avAudioSessionCategoryOptions:
+              AVAudioSessionCategoryOptions.allowBluetooth |
+              AVAudioSessionCategoryOptions.defaultToSpeaker,
+          avAudioSessionMode:
+              AVAudioSessionMode.defaultMode, // Fixed: changed from 'default'
+          avAudioSessionRouteSharingPolicy:
+              AVAudioSessionRouteSharingPolicy.defaultPolicy,
+          avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
+          androidAudioAttributes: const AndroidAudioAttributes(
+            contentType: AndroidAudioContentType.speech,
+            flags: AndroidAudioFlags.none,
+            usage: AndroidAudioUsage.voiceCommunication,
+          ),
+          androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+          androidWillPauseWhenDucked: true,
         ),
-        androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
-        androidWillPauseWhenDucked: true,
-      ));
+      );
 
       // Initialize recorder and player
       _recorder = FlutterSoundRecorder();
       _player = FlutterSoundPlayer();
 
-      await _recorder!.openRecorder();
-      // Emit progress frequently for responsive UI
+      // Open recorder with error handling
       try {
-        await _recorder!.setSubscriptionDuration(const Duration(milliseconds: 100));
-      } catch (_) {
-        // Some platforms may not support; ignore safely
+        await _recorder!.openRecorder();
+        // Emit progress frequently for responsive UI
+        try {
+          await _recorder!.setSubscriptionDuration(
+            const Duration(milliseconds: 100),
+          );
+        } catch (_) {
+          // Some platforms may not support; ignore safely
+        }
+      } catch (e) {
+        print('Failed to open recorder: $e');
+        return false;
       }
-      await _player!.openPlayer();
+
+      // Open player with error handling
+      try {
+        await _player!.openPlayer();
+      } catch (e) {
+        print('Failed to open player: $e');
+        // Player failure shouldn't prevent recording
+      }
 
       // Initialize stream controllers
       _levelController = StreamController<double>.broadcast();
@@ -122,13 +149,13 @@ class AudioService {
       _recorderSubscription = _recorder!.onProgress!.listen((e) {
         // Map decibels to 0..1 using calibrated range, then apply fast attack / slow release
         const double minDb = -60.0; // noise floor
-        const double maxDb = 0.0;   // loud speech
+        const double maxDb = 0.0; // loud speech
         final double levelDb = (e.decibels ?? minDb).clamp(minDb, maxDb);
         double instant = (levelDb - minDb) / (maxDb - minDb);
         if (!instant.isFinite) instant = 0.0;
 
         // Envelope smoothing: rise quickly, fall slowly
-        const double attack = 0.6;  // 60% new value per tick when rising
+        const double attack = 0.6; // 60% new value per tick when rising
         const double release = 0.15; // 15% new value per tick when falling
         if (instant > _smoothedLevel) {
           _smoothedLevel = attack * instant + (1.0 - attack) * _smoothedLevel;
@@ -178,7 +205,9 @@ class AudioService {
     }
   }
 
-  Future<void> _processAudioChunk(Function(String, int, Uint8List) onChunkReady) async {
+  Future<void> _processAudioChunk(
+    Function(String, int, Uint8List) onChunkReady,
+  ) async {
     if (_currentFilePath == null || _currentSessionId == null) return;
     if (_isStopping || _isProcessingChunk) return;
     if (_recorder == null) return;
@@ -196,23 +225,29 @@ class AudioService {
       final file = File(_currentFilePath!);
       if (await file.exists()) {
         final currentFileSize = await file.length();
-        
+
         // Only process if file has grown since last chunk
         if (currentFileSize > _lastProcessedBytes) {
           final audioBytes = await file.readAsBytes();
-          
+
           // Extract only the new data since last chunk
           final newDataStart = _lastProcessedBytes;
           final newDataLength = currentFileSize - _lastProcessedBytes;
-          
+
           if (newDataLength > 0) {
             final chunkData = audioBytes.sublist(
-              newDataStart, 
-              newDataStart + newDataLength
+              newDataStart,
+              newDataStart + newDataLength,
             );
-            
-            print('Sending chunk $_chunkCounter: ${chunkData.length} bytes (${newDataStart}-${newDataStart + newDataLength})');
-            onChunkReady(_currentSessionId!, _chunkCounter, Uint8List.fromList(chunkData));
+
+            print(
+              'Sending chunk $_chunkCounter: ${chunkData.length} bytes (${newDataStart}-${newDataStart + newDataLength})',
+            );
+            onChunkReady(
+              _currentSessionId!,
+              _chunkCounter,
+              Uint8List.fromList(chunkData),
+            );
             _chunkCounter++;
             _lastProcessedBytes = currentFileSize;
           }
@@ -315,9 +350,4 @@ class AudioService {
   }
 }
 
-enum RecorderState {
-  stopped,
-  recording,
-  paused,
-  error,
-}
+enum RecorderState { stopped, recording, paused, error }

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1015876411021",
+    "project_id": "medinote-6b0b6",
+    "storage_bucket": "medinote-6b0b6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1015876411021:android:eea5d942af4ff33eb5ccc4",
+        "android_client_info": {
+          "package_name": "com.example.ai_scribe_copilot"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDhNNcIwHQ5tgsI4ICqlIhEICL0HPL_K6Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

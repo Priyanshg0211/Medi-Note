@@ -36,13 +36,13 @@ public class RecordingForegroundService extends Service {
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("MediNote Recording")
             .setContentText("Recording patient consultation...")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .addAction(R.drawable.ic_launcher_foreground, "Stop", 
+            .addAction(R.mipmap.ic_launcher, "Stop", 
                 PendingIntent.getBroadcast(this, 0, 
                     new Intent("STOP_RECORDING"), 
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE))
