@@ -17,7 +17,16 @@ class MediNoteApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
-      providers: [ChangeNotifierProvider(create: (_) => RecordingProvider())],
+      providers: [
+        ChangeNotifierProvider(
+          create: (_) {
+            final provider = RecordingProvider();
+            // Initialize on app startup so audio interruption handling is active
+            provider.initialize();
+            return provider;
+          },
+        ),
+      ],
       child: MaterialApp(
         title: 'MediNote',
         theme: ThemeData(

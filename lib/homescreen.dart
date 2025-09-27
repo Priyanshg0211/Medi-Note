@@ -17,6 +17,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool _isCreatingPatient = false;
   final TextEditingController _patientNameController = TextEditingController();
   String? _currentPatientId;
+  bool _wasInterrupted = false;
 
   @override
   void initState() {
@@ -103,6 +104,49 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             _pulseController.stop();
           }
 
+          // Handle call interruption notifications
+          if (provider.isInterrupted && !_wasInterrupted) {
+            // Recording just got interrupted by a call
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Row(
+                    children: [
+                      Icon(Icons.phone_in_talk, color: Colors.white),
+                      SizedBox(width: 8),
+                      Text('Recording paused - Call detected'),
+                    ],
+                  ),
+                  backgroundColor: Colors.blue,
+                  duration: Duration(seconds: 3),
+                ),
+              );
+            });
+            _wasInterrupted = true;
+          } else if (!provider.isInterrupted &&
+              _wasInterrupted &&
+              provider.isRecording) {
+            // Recording resumed after call ended
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Row(
+                    children: [
+                      Icon(Icons.play_arrow, color: Colors.white),
+                      SizedBox(width: 8),
+                      Text('Recording resumed - Call ended'),
+                    ],
+                  ),
+                  backgroundColor: Colors.green,
+                  duration: Duration(seconds: 3),
+                ),
+              );
+            });
+            _wasInterrupted = false;
+          } else if (!provider.isInterrupted) {
+            _wasInterrupted = false;
+          }
+
           // Clear patient when recording stops
           if (provider.state == RecordingState.stopped &&
               _currentPatientId != null) {
@@ -152,6 +196,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     Color statusColor;
     String statusText;
     IconData statusIcon;
+    String? callStatusText;
 
     switch (provider.state) {
       case RecordingState.recording:
@@ -161,8 +206,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         break;
       case RecordingState.paused:
         statusColor = Colors.orange;
-        statusText = 'Recording Paused';
-        statusIcon = Icons.pause;
+        statusText =
+            provider.isInterrupted
+                ? 'Recording Paused - Call Active'
+                : 'Recording Paused';
+        statusIcon = provider.isInterrupted ? Icons.phone_in_talk : Icons.pause;
+        callStatusText =
+            provider.isInterrupted
+                ? 'Recording will resume when call ends'
+                : null;
         break;
       case RecordingState.starting:
         statusColor = Colors.blue;
@@ -251,6 +303,35 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ],
                   ],
                 ),
+                if (callStatusText != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.phone, size: 16, color: Colors.blue),
+                        const SizedBox(width: 6),
+                        Text(
+                          callStatusText,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.blue,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

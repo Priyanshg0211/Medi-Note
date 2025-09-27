@@ -24,6 +24,10 @@ class AudioService {
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
 
+  // Callback for interruption handling
+  Function()? _onInterruption;
+  Function()? _onInterruptionEnd;
+
   String? _currentSessionId;
   String? _currentFilePath;
   Timer? _chunkTimer;
@@ -41,9 +45,15 @@ class AudioService {
       }
 
       final micPermission = await Permission.microphone.request();
+      final phonePermission = await Permission.phone.request();
 
       if (micPermission != PermissionStatus.granted) {
         return false;
+      }
+
+      // Phone permission is optional for call detection, but recommended
+      if (phonePermission != PermissionStatus.granted) {
+        // print('Phone state permission denied - call interruption detection may not work');
       }
       final session = await AudioSession.instance;
       await session.configure(
@@ -51,7 +61,9 @@ class AudioService {
           avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
           avAudioSessionCategoryOptions:
               AVAudioSessionCategoryOptions.allowBluetooth |
-              AVAudioSessionCategoryOptions.defaultToSpeaker,
+              AVAudioSessionCategoryOptions.defaultToSpeaker |
+              AVAudioSessionCategoryOptions.mixWithOthers |
+              AVAudioSessionCategoryOptions.duckOthers,
           avAudioSessionMode: AVAudioSessionMode.defaultMode,
           avAudioSessionRouteSharingPolicy:
               AVAudioSessionRouteSharingPolicy.defaultPolicy,
@@ -61,7 +73,8 @@ class AudioService {
             flags: AndroidAudioFlags.none,
             usage: AndroidAudioUsage.voiceCommunication,
           ),
-          androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+          androidAudioFocusGainType:
+              AndroidAudioFocusGainType.gainTransientMayDuck,
           androidWillPauseWhenDucked: true,
         ),
       );
@@ -97,6 +110,8 @@ class AudioService {
   Future<bool> startRecording({
     required String sessionId,
     required Function(String, int, Uint8List) onChunkReady,
+    Function()? onInterruption,
+    Function()? onInterruptionEnd,
   }) async {
     if (!_isInitialized || _recorder == null) {
       throw Exception('AudioService not initialized');
@@ -108,6 +123,8 @@ class AudioService {
       _lastProcessedBytes = 0;
       _isStopping = false;
       _isProcessingChunk = false;
+      _onInterruption = onInterruption;
+      _onInterruptionEnd = onInterruptionEnd;
 
       final tempDir = await getTemporaryDirectory();
       _currentFilePath = '${tempDir.path}/recording_$sessionId.wav';
@@ -147,21 +164,54 @@ class AudioService {
 
       try {
         final session = await AudioSession.instance;
+
+        // Handle audio becoming noisy (e.g., headphones disconnected)
         session.becomingNoisyEventStream.listen((_) async {
           try {
-            await pauseRecording();
+            if (_recorder?.isRecording == true) {
+              await pauseRecording();
+            }
           } catch (_) {}
         });
+
+        // Handle audio interruptions (phone calls, other apps)
         session.interruptionEventStream.listen((event) async {
           if (event.begin) {
+            // Interruption started (phone call, other audio app)
             try {
-              await pauseRecording();
-            } catch (_) {}
+              if (_recorder?.isRecording == true) {
+                print('Audio interruption detected - pausing recording');
+                await pauseRecording();
+                _onInterruption?.call();
+              }
+            } catch (e) {
+              print('Error handling interruption: $e');
+            }
           } else {
+            // Interruption ended
+            print('Audio interruption ended - type: ${event.type}');
             if (event.type == sess.AudioInterruptionType.pause) {
+              // Resume recording after interruption ends
               try {
-                await resumeRecording();
-              } catch (_) {}
+                if (_recorder?.isPaused == true) {
+                  print('Resuming recording after pause interruption');
+                  await resumeRecording();
+                  _onInterruptionEnd?.call();
+                }
+              } catch (e) {
+                print('Error resuming after pause: $e');
+              }
+            } else if (event.type == sess.AudioInterruptionType.duck) {
+              // Audio was ducked (lowered volume) - resume if needed
+              try {
+                if (_recorder?.isPaused == true) {
+                  print('Resuming recording after duck interruption');
+                  await resumeRecording();
+                  _onInterruptionEnd?.call();
+                }
+              } catch (e) {
+                print('Error resuming after duck: $e');
+              }
             }
           }
         });

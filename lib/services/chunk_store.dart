@@ -74,6 +74,24 @@ class ChunkStore {
     }
   }
 
+  Future<List<ChunkStoreEntry>> loadForSession(String sessionId) async {
+    try {
+      final allEntries = await loadAll();
+      return allEntries.where((entry) => entry.sessionId == sessionId).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<int> getPendingChunkCount() async {
+    try {
+      final entries = await loadAll();
+      return entries.length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   Future<void> _saveAll(List<ChunkStoreEntry> entries) async {
     final file = await _manifestFile();
     await file.writeAsString(
@@ -127,6 +145,51 @@ class ChunkStore {
       if (await f.exists()) {
         await f.delete();
       }
+    } catch (_) {}
+  }
+
+  Future<void> removeAllForSession(String sessionId) async {
+    try {
+      final entries = await loadAll();
+      final sessionEntries =
+          entries.where((e) => e.sessionId == sessionId).toList();
+
+      // Delete files first
+      for (final entry in sessionEntries) {
+        try {
+          final f = File(entry.filePath);
+          if (await f.exists()) {
+            await f.delete();
+          }
+        } catch (_) {}
+      }
+
+      // Remove from manifest
+      entries.removeWhere((e) => e.sessionId == sessionId);
+      await _saveAll(entries);
+    } catch (_) {}
+  }
+
+  Future<void> cleanupOldChunks({int maxAgeHours = 24}) async {
+    try {
+      final entries = await loadAll();
+      final cutoffTime = DateTime.now().subtract(Duration(hours: maxAgeHours));
+      final oldEntries =
+          entries.where((e) => e.timestamp.isBefore(cutoffTime)).toList();
+
+      // Delete old files
+      for (final entry in oldEntries) {
+        try {
+          final f = File(entry.filePath);
+          if (await f.exists()) {
+            await f.delete();
+          }
+        } catch (_) {}
+      }
+
+      // Remove from manifest
+      entries.removeWhere((e) => e.timestamp.isBefore(cutoffTime));
+      await _saveAll(entries);
     } catch (_) {}
   }
 }

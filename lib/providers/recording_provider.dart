@@ -1,14 +1,15 @@
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import '../services/audio_service.dart';
 import '../services/api_service.dart';
 import '../services/chunk_store.dart';
 import '../services/firebase_service.dart';
+import '../services/connectivity_service.dart';
 
 class RecordingProvider extends ChangeNotifier {
   final AudioService _audioService = AudioService();
   final ChunkStore _chunkStore = ChunkStore();
+  final ConnectivityService _connectivityService = ConnectivityService();
 
   RecordingState _state = RecordingState.idle;
   String? _sessionId;
@@ -23,6 +24,7 @@ class RecordingProvider extends ChangeNotifier {
 
   List<PendingChunk> _pendingChunks = [];
   bool _isOnline = true;
+  bool _isInterrupted = false;
 
   RecordingState get state => _state;
   String? get sessionId => _sessionId;
@@ -33,7 +35,14 @@ class RecordingProvider extends ChangeNotifier {
   bool get isRecording => _state == RecordingState.recording;
   bool get isPaused => _state == RecordingState.paused;
   int get pendingChunksCount => _pendingChunks.length;
+
+  Future<int> get totalPendingChunksCount async {
+    final diskCount = await _chunkStore.getPendingChunkCount();
+    return _pendingChunks.length + diskCount;
+  }
+
   bool get isOnline => _isOnline;
+  bool get isInterrupted => _isInterrupted;
 
   set isOnline(bool value) {
     _isOnline = value;
@@ -42,6 +51,9 @@ class RecordingProvider extends ChangeNotifier {
 
   Future<void> initialize() async {
     try {
+      // Initialize connectivity service
+      await _connectivityService.initialize();
+
       final success = await _audioService.initialize();
       if (!success) {
         _state = RecordingState.error;
@@ -80,24 +92,16 @@ class RecordingProvider extends ChangeNotifier {
       notifyListeners();
     });
 
-    // Monitor connectivity
-    Connectivity().onConnectivityChanged.listen((dynamic event) {
-      // Handle both ConnectivityResult and List<ConnectivityResult>
-      bool nowOnline;
-      if (event is List<ConnectivityResult>) {
-        nowOnline = event.any((r) => r != ConnectivityResult.none);
-      } else if (event is ConnectivityResult) {
-        nowOnline = event != ConnectivityResult.none;
-      } else {
-        nowOnline = true;
-      }
-
+    // Monitor connectivity with enhanced handling
+    _connectivityService.connectivityStream.listen((isOnline) {
       final wasOnline = _isOnline;
-      _isOnline = nowOnline;
+      _isOnline = isOnline;
 
       if (!wasOnline && _isOnline) {
-        // Connection restored, try to upload pending chunks
-        _retryPendingUploads();
+        // Connection restored, try to upload pending chunks with delay
+        Future.delayed(const Duration(seconds: 2), () {
+          _retryPendingUploads();
+        });
       }
       notifyListeners();
     });
@@ -107,14 +111,14 @@ class RecordingProvider extends ChangeNotifier {
 
     // Load any pending chunks from disk (survive app restarts)
     _loadPendingFromDisk();
+
+    // Clean up old chunks on startup
+    _chunkStore.cleanupOldChunks();
   }
 
   Future<void> _initConnectivity() async {
     try {
-      final result = await Connectivity().checkConnectivity();
-      bool nowOnline;
-      nowOnline = result.any((r) => r != ConnectivityResult.none);
-      _isOnline = nowOnline;
+      _isOnline = _connectivityService.isOnline;
       notifyListeners();
     } catch (_) {}
   }
@@ -166,6 +170,8 @@ class RecordingProvider extends ChangeNotifier {
       final success = await _audioService.startRecording(
         sessionId: _sessionId!,
         onChunkReady: _handleAudioChunk,
+        onInterruption: handleInterruption,
+        onInterruptionEnd: handleInterruptionEnd,
       );
 
       if (success) {
@@ -197,6 +203,22 @@ class RecordingProvider extends ChangeNotifier {
 
   Future<void> resumeRecording() async {
     await _audioService.resumeRecording();
+    _isInterrupted = false;
+    notifyListeners();
+  }
+
+  Future<void> handleInterruption() async {
+    if (_state == RecordingState.recording) {
+      _isInterrupted = true;
+      await pauseRecording();
+      notifyListeners();
+    }
+  }
+
+  Future<void> handleInterruptionEnd() async {
+    if (_isInterrupted && _state == RecordingState.paused) {
+      await resumeRecording();
+    }
   }
 
   Future<void> stopRecording() async {
@@ -237,6 +259,12 @@ class RecordingProvider extends ChangeNotifier {
       }
 
       _state = RecordingState.stopped;
+
+      // Clean up any remaining chunks for this session
+      if (_sessionId != null) {
+        await _chunkStore.removeAllForSession(_sessionId!);
+      }
+
       _sessionId = null;
       _userId = null;
       _patientName = null;
@@ -245,6 +273,7 @@ class RecordingProvider extends ChangeNotifier {
       _lastUploadedChunkNumber = 0;
       _lastGcsPath = null;
       _lastPublicUrl = null;
+      _isInterrupted = false;
       notifyListeners();
     } catch (e) {
       // print('Error stopping recording: $e');
@@ -313,15 +342,21 @@ class RecordingProvider extends ChangeNotifier {
   }
 
   Future<void> _retryPendingUploads() async {
+    if (!_isOnline) return; // Don't retry if still offline
+
     final inMemory = List<PendingChunk>.from(_pendingChunks);
     _pendingChunks.clear();
     // Load disk-backed entries
     final diskEntries = await _chunkStore.loadAll();
 
-    // Retry in-memory first (likely newest)
+    // Retry in-memory first (likely newest) with exponential backoff
     for (final chunk in inMemory) {
       try {
-        await _uploadChunk(chunk.sessionId, chunk.chunkNumber, chunk.audioData);
+        await _uploadChunkWithRetry(
+          chunk.sessionId,
+          chunk.chunkNumber,
+          chunk.audioData,
+        );
       } catch (e) {
         // print('Failed to retry chunk upload: $e');
         // Add back to pending if still failing
@@ -329,7 +364,7 @@ class RecordingProvider extends ChangeNotifier {
       }
     }
 
-    // Retry disk-backed entries
+    // Retry disk-backed entries with exponential backoff
     for (final entry in diskEntries) {
       try {
         final bytes = await _chunkStore.readChunkBytes(entry);
@@ -337,13 +372,36 @@ class RecordingProvider extends ChangeNotifier {
           await _chunkStore.remove(entry);
           continue;
         }
-        await _uploadChunk(entry.sessionId, entry.chunkNumber, bytes);
+        await _uploadChunkWithRetry(entry.sessionId, entry.chunkNumber, bytes);
         await _chunkStore.remove(entry);
       } catch (e) {
         // print('Failed to retry disk chunk upload: $e');
       }
     }
     notifyListeners();
+  }
+
+  Future<void> _uploadChunkWithRetry(
+    String sessionId,
+    int chunkNumber,
+    Uint8List audioData,
+  ) async {
+    int retryCount = 0;
+    const maxRetries = 3;
+
+    while (retryCount < maxRetries) {
+      try {
+        await _uploadChunk(sessionId, chunkNumber, audioData);
+        return; // Success, exit retry loop
+      } catch (e) {
+        retryCount++;
+        if (retryCount >= maxRetries) {
+          rethrow; // Re-throw if max retries exceeded
+        }
+        // Exponential backoff: wait 1s, 2s, 4s
+        await Future.delayed(Duration(seconds: 1 << (retryCount - 1)));
+      }
+    }
   }
 
   void _startDurationTimer() {
@@ -358,6 +416,7 @@ class RecordingProvider extends ChangeNotifier {
   @override
   void dispose() {
     _audioService.dispose();
+    _connectivityService.dispose();
     super.dispose();
   }
 
