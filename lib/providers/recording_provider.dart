@@ -4,6 +4,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import '../services/audio_service.dart';
 import '../services/api_service.dart';
 import '../services/chunk_store.dart';
+import '../services/firebase_service.dart';
 
 class RecordingProvider extends ChangeNotifier {
   final AudioService _audioService = AudioService();
@@ -11,6 +12,7 @@ class RecordingProvider extends ChangeNotifier {
 
   RecordingState _state = RecordingState.idle;
   String? _sessionId;
+  String? _userId;
   String? _patientName;
   DateTime? _startTime;
   Duration _duration = Duration.zero;
@@ -25,6 +27,7 @@ class RecordingProvider extends ChangeNotifier {
   // Getters
   RecordingState get state => _state;
   String? get sessionId => _sessionId;
+  String? get userId => _userId;
   String? get patientName => _patientName;
   Duration get duration => _duration;
   double get audioLevel => _audioLevel;
@@ -40,8 +43,15 @@ class RecordingProvider extends ChangeNotifier {
   }
 
   Future<void> initialize() async {
-    final success = await _audioService.initialize();
-    if (!success) {
+    try {
+      final success = await _audioService.initialize();
+      if (!success) {
+        _state = RecordingState.error;
+        notifyListeners();
+        return;
+      }
+    } catch (e) {
+      print('Failed to initialize audio service: $e');
       _state = RecordingState.error;
       notifyListeners();
       return;
@@ -105,13 +115,7 @@ class RecordingProvider extends ChangeNotifier {
     try {
       final result = await Connectivity().checkConnectivity();
       bool nowOnline;
-      if (result is List<ConnectivityResult>) {
-        nowOnline = result.any((r) => r != ConnectivityResult.none);
-      } else if (result is ConnectivityResult) {
-        nowOnline = result != ConnectivityResult.none;
-      } else {
-        nowOnline = true;
-      }
+      nowOnline = result.any((r) => r != ConnectivityResult.none);
       _isOnline = nowOnline;
       notifyListeners();
     } catch (_) {}
@@ -120,18 +124,40 @@ class RecordingProvider extends ChangeNotifier {
   Future<void> startRecording({
     required String patientId,
     required String patientName,
+    required String userId,
   }) async {
     try {
       _state = RecordingState.starting;
       notifyListeners();
 
-      // Create session
-      _sessionId = await ApiService.createSession(
-        patientId: patientId,
-        userId: 'user_123', // In real app, get from authentication
-        patientName: patientName,
-      );
+      // Create Firebase session first
+      String firebaseSessionId;
+      try {
+        firebaseSessionId = await FirebaseService.createRecordingSession(
+          patientId: patientId,
+          patientName: patientName,
+          userId: userId,
+        );
+      } catch (e) {
+        print('Failed to create Firebase session: $e');
+        firebaseSessionId =
+            'firebase_offline_${DateTime.now().millisecondsSinceEpoch}';
+      }
 
+      // Create API session with fallback for offline mode
+      try {
+        _sessionId = await ApiService.createSession(
+          patientId: patientId,
+          userId: userId,
+          patientName: patientName,
+        );
+      } catch (e) {
+        print('Failed to create API session, using offline mode: $e');
+        // Use Firebase session ID as fallback
+        _sessionId = firebaseSessionId;
+      }
+
+      _userId = userId;
       _patientName = patientName;
       _startTime = DateTime.now();
       _lastUploadedChunkNumber = 0;
@@ -149,6 +175,15 @@ class RecordingProvider extends ChangeNotifier {
         _startDurationTimer();
       } else {
         _state = RecordingState.error;
+        // Update Firebase session status to error
+        try {
+          await FirebaseService.updateRecordingSession(
+            sessionId: firebaseSessionId,
+            status: 'error',
+          );
+        } catch (e) {
+          print('Failed to update Firebase session status: $e');
+        }
       }
       notifyListeners();
     } catch (e) {
@@ -169,9 +204,12 @@ class RecordingProvider extends ChangeNotifier {
   Future<void> stopRecording() async {
     try {
       await _audioService.stopRecording();
+
       // Mark session complete using the last uploaded chunk info, if present
-      if (_sessionId != null && _lastUploadedChunkNumber > 0 &&
-          _lastGcsPath != null && _lastPublicUrl != null) {
+      if (_sessionId != null &&
+          _lastUploadedChunkNumber > 0 &&
+          _lastGcsPath != null &&
+          _lastPublicUrl != null) {
         try {
           await ApiService.notifyChunkUploaded(
             sessionId: _sessionId!,
@@ -186,8 +224,23 @@ class RecordingProvider extends ChangeNotifier {
         }
       }
 
+      // Update Firebase session status to completed
+      if (_sessionId != null && _sessionId!.startsWith('firebase_')) {
+        try {
+          await FirebaseService.updateRecordingSession(
+            sessionId: _sessionId!,
+            status: 'completed',
+            totalChunks: _lastUploadedChunkNumber,
+            endTime: DateTime.now().toIso8601String(),
+          );
+        } catch (e) {
+          print('Failed to update Firebase session status: $e');
+        }
+      }
+
       _state = RecordingState.stopped;
       _sessionId = null;
+      _userId = null;
       _patientName = null;
       _startTime = null;
       _duration = Duration.zero;
@@ -202,7 +255,11 @@ class RecordingProvider extends ChangeNotifier {
     }
   }
 
-  void _handleAudioChunk(String sessionId, int chunkNumber, Uint8List audioData) async {
+  void _handleAudioChunk(
+    String sessionId,
+    int chunkNumber,
+    Uint8List audioData,
+  ) async {
     try {
       if (_isOnline) {
         await _uploadChunk(sessionId, chunkNumber, audioData);
@@ -219,7 +276,11 @@ class RecordingProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> _uploadChunk(String sessionId, int chunkNumber, Uint8List audioData) async {
+  Future<void> _uploadChunk(
+    String sessionId,
+    int chunkNumber,
+    Uint8List audioData,
+  ) async {
     // Get presigned URL
     final presignedResponse = await ApiService.getPresignedUrl(
       sessionId: sessionId,
@@ -315,23 +376,18 @@ class RecordingProvider extends ChangeNotifier {
   }
 }
 
-enum RecordingState {
-  idle,
-  starting,
-  recording,
-  paused,
-  stopped,
-  error,
-}
+enum RecordingState { idle, starting, recording, paused, stopped, error }
 
 class PendingChunk {
   final String sessionId;
+  final String userId;
   final int chunkNumber;
   final Uint8List audioData;
   final DateTime timestamp;
 
   PendingChunk({
     required this.sessionId,
+    required this.userId,
     required this.chunkNumber,
     required this.audioData,
     required this.timestamp,
@@ -344,7 +400,7 @@ extension _RecordingProviderDisk on RecordingProvider {
       final diskEntries = await _chunkStore.loadAll();
       if (diskEntries.isNotEmpty) {
         // Keep only a lightweight counter in memory; actual bytes remain on disk
-        notifyListeners();
+        // Note: notifyListeners() will be called by the calling method
       }
     } catch (e) {
       print('Failed loading pending chunks from disk: $e');
@@ -352,21 +408,28 @@ extension _RecordingProviderDisk on RecordingProvider {
   }
 
   Future<void> _persistPendingChunk(
-      String sessionId, int chunkNumber, Uint8List audioData) async {
+    String sessionId,
+    int chunkNumber,
+    Uint8List audioData,
+  ) async {
     try {
       // Write to disk first to survive process death
       await _chunkStore.writeChunk(
         sessionId: sessionId,
+        userId: _userId ?? 'unknown',
         chunkNumber: chunkNumber,
         bytes: audioData,
       );
       // Also keep in-memory for quick retry if still running
-      _pendingChunks.add(PendingChunk(
-        sessionId: sessionId,
-        chunkNumber: chunkNumber,
-        audioData: audioData,
-        timestamp: DateTime.now(),
-      ));
+      _pendingChunks.add(
+        PendingChunk(
+          sessionId: sessionId,
+          userId: _userId ?? 'unknown',
+          chunkNumber: chunkNumber,
+          audioData: audioData,
+          timestamp: DateTime.now(),
+        ),
+      );
     } catch (e) {
       print('Failed to persist pending chunk: $e');
     }

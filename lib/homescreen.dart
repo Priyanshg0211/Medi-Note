@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/recording_provider.dart';
-import '../services/api_service.dart';
-import '../models/patient.dart';
-
+import '../services/firebase_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -15,18 +13,15 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
-  
-  List<Patient> _patients = [];
-  Patient? _selectedPatient;
-  bool _isLoading = false;
-  bool _useExisting = true; // toggle between existing and new patient
+
   bool _isCreatingPatient = false;
   final TextEditingController _patientNameController = TextEditingController();
+  String? _currentPatientId;
 
   @override
   void initState() {
     super.initState();
-    
+
     // Initialize pulse animation for recording indicator
     _pulseController = AnimationController(
       duration: const Duration(milliseconds: 1000),
@@ -35,29 +30,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _pulseAnimation = Tween<double>(begin: 0.8, end: 1.2).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
-    
+
     _initializeProvider();
-    _loadPatients();
   }
 
   Future<void> _initializeProvider() async {
     final provider = context.read<RecordingProvider>();
-    await provider.initialize();
-  }
-
-  Future<void> _loadPatients() async {
-    setState(() => _isLoading = true);
     try {
-      final patients = await ApiService.getPatients(userId: 'user_123');
-      setState(() {
-        _patients = patients;
-        _isLoading = false;
-      });
+      await provider.initialize();
+      if (provider.state == RecordingState.error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Audio service failed to initialize. Please check microphone permissions.',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
     } catch (e) {
-      setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load patients: $e')),
+          SnackBar(
+            content: Text('Failed to initialize recording: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
@@ -70,6 +69,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
+  void _clearCurrentPatient() {
+    setState(() {
+      _currentPatientId = null;
+      _patientNameController.clear();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -77,10 +83,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       appBar: AppBar(
         title: const Text(
           'MediNote',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 24,
-          ),
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 24),
         ),
         backgroundColor: Colors.white,
         foregroundColor: const Color(0xFF1E293B),
@@ -88,10 +91,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         centerTitle: true,
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1.0),
-          child: Container(
-            color: const Color(0xFFE2E8F0),
-            height: 1.0,
-          ),
+          child: Container(color: const Color(0xFFE2E8F0), height: 1.0),
         ),
       ),
       body: Consumer<RecordingProvider>(
@@ -103,6 +103,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             _pulseController.stop();
           }
 
+          // Clear patient when recording stops
+          if (provider.state == RecordingState.stopped &&
+              _currentPatientId != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _clearCurrentPatient();
+            });
+          }
+
           return SingleChildScrollView(
             padding: const EdgeInsets.all(24.0),
             child: Column(
@@ -110,25 +118,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               children: [
                 // Status Card
                 _buildStatusCard(provider),
-                
+
                 const SizedBox(height: 24),
-                
+
                 // Patient Selection
-                _buildPatientSection(),
-                
+                _buildPatientSection(provider),
+
                 const SizedBox(height: 32),
-                
+
                 // Recording Controls
                 _buildRecordingControls(provider),
-                
+
                 const SizedBox(height: 24),
-                
+
                 // Audio Visualizer
                 if (provider.isRecording || provider.isPaused)
                   _buildAudioVisualizer(provider),
-                
+
                 const SizedBox(height: 24),
-                
+
                 // Recording Info
                 if (provider.isRecording || provider.isPaused)
                   _buildRecordingInfo(provider),
@@ -194,11 +202,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               color: statusColor.withOpacity(0.1),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(
-              statusIcon,
-              color: statusColor,
-              size: 24,
-            ),
+            child: Icon(statusIcon, color: statusColor, size: 24),
           ),
           const SizedBox(width: 16),
           Expanded(
@@ -223,19 +227,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      provider.isOnline ? 'Online' : 'Offline',
+                      provider.isOnline ? 'Online' : 'Offline Mode',
                       style: TextStyle(
                         fontSize: 14,
                         color: provider.isOnline ? Colors.green : Colors.red,
+                        fontWeight:
+                            provider.isOnline
+                                ? FontWeight.normal
+                                : FontWeight.w500,
                       ),
                     ),
                     if (provider.pendingChunksCount > 0) ...[
                       const SizedBox(width: 12),
-                      const Icon(
-                        Icons.pending,
-                        size: 16,
-                        color: Colors.orange,
-                      ),
+                      const Icon(Icons.pending, size: 16, color: Colors.orange),
                       const SizedBox(width: 4),
                       Text(
                         '${provider.pendingChunksCount} pending',
@@ -255,7 +259,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildPatientSection() {
+  Widget _buildPatientSection(RecordingProvider provider) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -281,151 +285,108 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ),
           const SizedBox(height: 16),
-          // Mode toggle: Existing vs New
-          Row(
-            children: [
-              ChoiceChip(
-                label: const Text('Existing'),
-                selected: _useExisting,
-                onSelected: (v) {
-                  setState(() {
-                    _useExisting = true;
-                  });
-                },
+
+          // Patient name input field
+          TextFormField(
+            controller: _patientNameController,
+            enabled: !provider.isRecording && !provider.isPaused,
+            decoration: InputDecoration(
+              labelText: 'Patient Name',
+              hintText:
+                  provider.isRecording || provider.isPaused
+                      ? 'Cannot edit during recording'
+                      : 'Enter patient name',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
               ),
-              const SizedBox(width: 8),
-              ChoiceChip(
-                label: const Text('New'),
-                selected: !_useExisting,
-                onSelected: (v) {
-                  setState(() {
-                    _useExisting = false;
-                    _selectedPatient = null;
-                  });
-                },
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.blue),
               ),
-            ],
+              disabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+              ),
+              contentPadding: const EdgeInsets.all(16),
+            ),
+            onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: 12),
-          
-          // Existing patient dropdown or New patient text field
-          if (_useExisting)
-            DropdownButtonFormField<Patient>(
-              value: _selectedPatient,
-              decoration: InputDecoration(
-                labelText: 'Select Patient',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Colors.blue),
-                ),
-                contentPadding: const EdgeInsets.all(16),
-              ),
-              items: _patients.map((patient) {
-                return DropdownMenuItem(
-                  value: patient,
-                  child: Text(patient.name),
-                );
-              }).toList(),
-              onChanged: (patient) {
-                setState(() {
-                  _selectedPatient = patient;
-                  _patientNameController.text = patient?.name ?? '';
-                });
-              },
-            )
-          else
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextFormField(
-                  controller: _patientNameController,
-                  decoration: InputDecoration(
-                    labelText: 'New Patient Name',
-                    hintText: 'Enter new patient name',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: Colors.blue),
-                    ),
-                    contentPadding: const EdgeInsets.all(16),
-                  ),
-                  onChanged: (_) => setState(() {}),
-                ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: ElevatedButton.icon(
-                    onPressed: _patientNameController.text.isEmpty || _isCreatingPatient
-                        ? null
-                        : () async {
-                            setState(() => _isCreatingPatient = true);
-                            try {
-                              final newPatient = await ApiService.addPatient(
-                                name: _patientNameController.text,
-                                userId: 'user_123',
-                              );
-                              setState(() {
-                                _patients.insert(0, newPatient);
-                                _selectedPatient = newPatient;
-                                _useExisting = true;
-                              });
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Patient added')),
-                                );
-                              }
-                            } catch (e) {
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Failed to add patient: $e')),
-                                );
-                              }
-                            } finally {
-                              if (mounted) setState(() => _isCreatingPatient = false);
-                            }
-                          },
-                    icon: _isCreatingPatient
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.person_add_alt_1),
-                    label: const Text('Save New Patient'),
-                  ),
-                ),
-              ],
+
+          // Save patient button
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ElevatedButton.icon(
+              onPressed:
+                  _patientNameController.text.isEmpty ||
+                          _isCreatingPatient ||
+                          provider.isRecording ||
+                          provider.isPaused
+                      ? null
+                      : () async {
+                        setState(() => _isCreatingPatient = true);
+                        try {
+                          final newPatient = await FirebaseService.addPatient(
+                            name: _patientNameController.text,
+                            userId: 'user_123',
+                          );
+
+                          _currentPatientId = newPatient.id;
+
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  newPatient.id.startsWith('local_')
+                                      ? 'Patient added locally (offline mode)'
+                                      : 'Patient added successfully to Firebase',
+                                ),
+                                backgroundColor:
+                                    newPatient.id.startsWith('local_')
+                                        ? Colors.orange
+                                        : Colors.green,
+                              ),
+                            );
+                          }
+                        } catch (e) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Failed to add patient: $e'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
+                        } finally {
+                          if (mounted)
+                            setState(() => _isCreatingPatient = false);
+                        }
+                      },
+              icon:
+                  _isCreatingPatient
+                      ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                      : const Icon(Icons.person_add_alt_1),
+              label: const Text('Save Patient'),
             ),
-          
-          const SizedBox(height: 12),
-          
-          if (_isLoading)
-            const Center(child: CircularProgressIndicator())
-          else
-            TextButton.icon(
-              onPressed: _loadPatients,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Refresh Patients'),
-            ),
+          ),
         ],
       ),
     );
   }
 
   Widget _buildRecordingControls(RecordingProvider provider) {
-    final canStartRecording = (provider.state == RecordingState.idle || provider.state == RecordingState.stopped) && 
-        (
-          (_useExisting && _selectedPatient != null) ||
-          (!_useExisting && _patientNameController.text.isNotEmpty)
-        );
-    
+    final canStartRecording =
+        (provider.state == RecordingState.idle ||
+            provider.state == RecordingState.stopped ||
+            provider.state == RecordingState.error) &&
+        _patientNameController.text.isNotEmpty &&
+        _currentPatientId != null;
+
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -443,10 +404,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         children: [
           // Main Record Button
           GestureDetector(
-            onTap: provider.isRecording 
-                ? () => provider.stopRecording()
-                : canStartRecording 
-                    ? () => _startRecording(provider) 
+            onTap:
+                provider.isRecording
+                    ? () => provider.stopRecording()
+                    : canStartRecording
+                    ? () => _startRecording(provider)
                     : null,
             child: AnimatedBuilder(
               animation: _pulseAnimation,
@@ -458,14 +420,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     height: 100,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: provider.isRecording 
-                          ? Colors.red 
-                          : canStartRecording 
-                              ? Colors.blue 
+                      color:
+                          provider.isRecording
+                              ? Colors.red
+                              : canStartRecording
+                              ? Colors.blue
                               : Colors.grey,
                       boxShadow: [
                         BoxShadow(
-                          color: (provider.isRecording ? Colors.red : Colors.blue)
+                          color: (provider.isRecording
+                                  ? Colors.red
+                                  : Colors.blue)
                               .withOpacity(0.3),
                           blurRadius: 20,
                           spreadRadius: provider.isRecording ? 10 : 0,
@@ -482,24 +447,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               },
             ),
           ),
-          
+
           const SizedBox(height: 16),
-          
+
           Text(
-            provider.isRecording 
-                ? 'Tap to Stop Recording' 
+            provider.isRecording
+                ? 'Tap to Stop Recording'
+                : provider.state == RecordingState.error
+                ? 'Tap to Retry Recording'
                 : canStartRecording
-                    ? 'Tap to Start Recording'
-                    : 'Select a patient to start',
+                ? 'Tap to Start Recording'
+                : 'Select a patient to start',
             style: TextStyle(
               fontSize: 16,
               color: canStartRecording ? const Color(0xFF1E293B) : Colors.grey,
               fontWeight: FontWeight.w500,
             ),
           ),
-          
+
           const SizedBox(height: 24),
-          
+
           // Control Buttons
           if (provider.isRecording || provider.isPaused)
             Row(
@@ -508,9 +475,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 _buildControlButton(
                   icon: provider.isPaused ? Icons.play_arrow : Icons.pause,
                   label: provider.isPaused ? 'Resume' : 'Pause',
-                  onPressed: provider.isPaused 
-                      ? () => provider.resumeRecording()
-                      : () => provider.pauseRecording(),
+                  onPressed:
+                      provider.isPaused
+                          ? () => provider.resumeRecording()
+                          : () => provider.pauseRecording(),
                   color: Colors.orange,
                 ),
                 _buildControlButton(
@@ -544,11 +512,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
           child: IconButton(
             onPressed: onPressed,
-            icon: Icon(
-              icon,
-              color: color,
-              size: 24,
-            ),
+            icon: Icon(icon, color: color, size: 24),
           ),
         ),
         const SizedBox(height: 8),
@@ -590,7 +554,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ),
           const SizedBox(height: 16),
-          
+
           // Audio Level Bar
           Container(
             height: 8,
@@ -603,43 +567,43 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               widthFactor: provider.audioLevel,
               child: Container(
                 decoration: BoxDecoration(
-                  color: provider.audioLevel > 0.7 
-                      ? Colors.red 
-                      : provider.audioLevel > 0.4 
-                          ? Colors.orange 
+                  color:
+                      provider.audioLevel > 0.7
+                          ? Colors.red
+                          : provider.audioLevel > 0.4
+                          ? Colors.orange
                           : Colors.green,
                   borderRadius: BorderRadius.circular(4),
                 ),
               ),
             ),
           ),
-          
+
           const SizedBox(height: 8),
-          
+
           // Level Indicator
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
                 'Level: ${(provider.audioLevel * 100).toInt()}%',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Color(0xFF64748B),
-                ),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: provider.audioLevel > 0.1 
-                      ? Colors.green.withOpacity(0.1)
-                      : Colors.grey.withOpacity(0.1),
+                  color:
+                      provider.audioLevel > 0.1
+                          ? Colors.green.withOpacity(0.1)
+                          : Colors.grey.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   provider.audioLevel > 0.1 ? 'Detecting Audio' : 'Silent',
                   style: TextStyle(
                     fontSize: 12,
-                    color: provider.audioLevel > 0.1 ? Colors.green : Colors.grey,
+                    color:
+                        provider.audioLevel > 0.1 ? Colors.green : Colors.grey,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -677,14 +641,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ),
           const SizedBox(height: 16),
-          
+
           _buildInfoRow('Patient', provider.patientName ?? 'Unknown'),
           _buildInfoRow('Duration', provider.formatDuration(provider.duration)),
           _buildInfoRow('Session ID', provider.sessionId ?? 'N/A'),
-          
+
           if (provider.pendingChunksCount > 0)
             _buildInfoRow(
-              'Pending Uploads', 
+              'Pending Uploads',
               '${provider.pendingChunksCount} chunks',
               isWarning: true,
             ),
@@ -701,10 +665,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         children: [
           Text(
             label,
-            style: const TextStyle(
-              fontSize: 14,
-              color: Color(0xFF64748B),
-            ),
+            style: const TextStyle(fontSize: 14, color: Color(0xFF64748B)),
           ),
           Text(
             value,
@@ -720,40 +681,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _startRecording(RecordingProvider provider) async {
-    if ((_useExisting && _selectedPatient == null) ||
-        (!_useExisting && _patientNameController.text.isEmpty)) {
+    if (_patientNameController.text.isEmpty || _currentPatientId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select or enter a patient')),
+        const SnackBar(content: Text('Please save a patient first')),
       );
       return;
     }
 
     try {
-      String patientId;
-      String patientName = _patientNameController.text;
-      if (_useExisting) {
-        patientId = _selectedPatient!.id;
-        patientName = _selectedPatient!.name;
-      } else {
-        // Auto-create patient if starting directly in New mode
-        setState(() => _isCreatingPatient = true);
-        final newPatient = await ApiService.addPatient(
-          name: _patientNameController.text,
-          userId: 'user_123',
-        );
-        setState(() {
-          _patients.insert(0, newPatient);
-          _selectedPatient = newPatient;
-          _useExisting = true;
-          _isCreatingPatient = false;
-        });
-        patientId = newPatient.id;
-        patientName = newPatient.name;
-      }
-      
       await provider.startRecording(
-        patientId: patientId,
-        patientName: patientName,
+        patientId: _currentPatientId!,
+        patientName: _patientNameController.text,
+        userId: 'user_123', // In real app, get from authentication
       );
 
       if (provider.state == RecordingState.error) {
